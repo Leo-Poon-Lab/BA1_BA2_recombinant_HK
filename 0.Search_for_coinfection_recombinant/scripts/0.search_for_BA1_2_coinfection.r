@@ -4,6 +4,9 @@ library(readxl)
 library(writexl)
 library(lubridate)
 library(ggsci)
+library(ggplot2)
+library(ggpattern)
+library(patchwork)
 source("https://raw.githubusercontent.com/Koohoko/Save-ggplot-to-pptx/main/scripts/save_pptx.r")
 
 # examine the samples collected after 2021-12-01
@@ -31,6 +34,37 @@ write_csv(df_country_summary, "../results/country_of_imported_cases_all.csv")
 
 df_metadata_hk_import_all <- df_metadata_hk %>% filter(grepl("^import", tolower(Classification))) %>% filter(`Report date`>="2021-11-15" & `Report date`<="2022-02-04") %>% filter(sequenced_by_us)
 df_metadata_hk_import <- df_metadata_hk_import_all %>% filter(coverage>=0.85)
+quantile(df_metadata_hk_import$coverage, seq(0,100)/100)
+median(df_metadata_hk_import$coverage)
+mean(df_metadata_hk_import$coverage)
+
+## check sequencing depth for recombinant samples
+df_metadata_hk_import %>% filter(Sample=="WHP5870") %>% .$coverage
+df_metadata_hk_import %>% filter(grepl("WHP6494", Sample)) %>% .$coverage
+
+df_sam_whp5870 <- read_tsv("../../../../2020/2020-09-01_COVID_NGS_pipeline/COVID_NGS_pipeline_results_shared/pysamstats/WHP5870.tsv")
+df_sam_whp6494 <- read_tsv("../../../../2020/2020-09-01_COVID_NGS_pipeline/COVID_NGS_pipeline_results_shared/pysamstats/WHP6494-ARCTIC-S20-iseq.tsv")
+
+df_sam_whp5870 %>% filter(pos %in% 20055:21618) %>%.$reads_all %>% mean(na.rm=T)
+df_sam_whp5870 %>% filter(pos %in% 20055:21618) %>%.$reads_all %>% median(na.rm=T)
+df_sam_whp6494 %>% filter(pos %in% 20055:21618) %>%.$reads_all %>% mean(na.rm=T)
+df_sam_whp6494 %>% filter(pos %in% 20055:21618) %>%.$reads_all %>% median(na.rm=T)
+
+files_bamstat <- list.files("../../../../2020/2020-09-01_COVID_NGS_pipeline/COVID_NGS_pipeline_results_shared/pysamstats/", full.names=T)
+files_bamstat_sim <- list.files("../../../../2020/2020-09-01_COVID_NGS_pipeline/COVID_NGS_pipeline_results_shared/pysamstats/")
+files_bamstat_sim <- gsub(".tsv", "", files_bamstat_sim)
+samples_tocheck <- df_metadata_hk_import$Sample
+samples_tocheck[!samples_tocheck %in% files_bamstat_sim]
+files_bamstat_tocheck <- files_bamstat[files_bamstat_sim %in% samples_tocheck]
+
+mean_depth <- mclapply(files_bamstat_tocheck, function(x){
+	tmp <- read_tsv(x)
+	mean(tmp$reads_all, na.rm=T)
+})
+mean_depth <- unlist(mean_depth)
+range(mean_depth)
+median(mean_depth)
+
 
 df_metadata_hk_import$lineage_sim <- df_metadata_hk_import$lineage
 sort(unique(df_metadata_hk_import$lineage_sim))
@@ -81,19 +115,50 @@ df_metadata_hk_import$`Country of importation`[df_metadata_hk_import$`Country of
 
 df_metadata_hk_import$`Country of importation` <- factor(df_metadata_hk_import$`Country of importation`, levels=c(names(country_keep), "Others"), labels=c(paste0(names(country_keep), " (N=", country_keep, ")"), "Others (N<10)"))
 
+date_breaks <- seq(as.Date("2021-11-15"), as.Date("2022-02-07"), by=7)
+date_breaks2 <- seq(as.Date("2021-11-15"), as.Date("2022-02-07"), by=14)
+df_metadata_hk_import$`Country of importation` <- factor(df_metadata_hk_import$`Country of importation`, levels=c("United States Of America (N=21)", "United Kingdom (N=18)", "Nepal (N=12)", "Philippines (N=12)", "Canada (N=10)", "Others (N<10)"))
 p1 <- df_metadata_hk_import %>% ggplot() +
 	geom_histogram(aes(x=ymd(`Report date`), fill=`Country of importation`), stat="count", color="black", size=0.2)+
-	scale_x_date(date_breaks = "1 week", date_labels = "%b-%d", expand = c(0, 0), limits = c(ymd("2021-11-10"), NA), guide = guide_axis(n.dodge = 2))+
+	scale_x_date(breaks=date_breaks2, date_labels = "%b-%d", expand = c(0.01, 0.01), limits = c(ymd("2021-11-15"), ymd("2022-02-07")))+
+	scale_y_continuous(breaks=seq(0,8,2), limits=c(0,8))+
 	scale_fill_jama(name="Country")+
-	facet_wrap(vars(lineage_sim), ncol=1)+
+	facet_wrap(vars(lineage_sim), ncol=1, strip.position="right")+
 	xlab("Report date")+
 	ylab("Number of cases")+
 	theme(legend.position="bottom")+
+	ggtitle("B")+
 	NULL
 
 ggsave("../results/time_series_imported_cases.pdf", width=7.5/sqrt(2)*1.2, height=7.5*1.2, plot=p1)
 save_pptx("../results/time_series_imported_cases.pptx", width=7.5/sqrt(2), height=7.5, plot=p1)
 write_xlsx(df_metadata_hk_import, "../results/df_metadata_hk_import.xlsx")
+
+## figure for revision
+df_metadata_hk_import <- read_excel("../results/df_metadata_hk_import.xlsx")
+df_metadata_hk_import$lineage_sim[is.na(df_metadata_hk_import$lineage_sim)] <- "Recombinant (N=2)"
+df_metadata_hk_import$lineage_sim <- factor(df_metadata_hk_import$lineage_sim)
+p2 <- df_metadata_hk_import %>% ggplot() +
+	# geom_histogram(aes(x=as.Date(`Report date`), fill=lineage_sim), color="black", size=0.2, pattern_spacing = 0.01, binwidth=7)+
+	geom_histogram_pattern(aes(x=as.Date(`Report date`), pattern=lineage_sim, pattern_angle=lineage_sim, fill=lineage_sim), size=0.2, breaks = 
+	date_breaks, colour= 'black', pattern_spacing = 0.03, pattern_color="black", pattern_fill="black", pattern_alpha=0.8, pattern_size=0.2)+
+	# geom_col_pattern(aes(x=ymd(`Report date`), y=count, pattern = lineage_sim, fill=lineage_sim, pattern_fill=lineage_sim), color="black", pattern_density = 0.35, pattern_key_scale_factor = 1.3, pattern_spacing = 0.01)+
+	scale_x_date(breaks=date_breaks2, date_labels = "%b-%d", expand = c(0.01, 0.01), limits = c(ymd("2021-11-15"), NA))+
+	scale_fill_discrete()+
+	# facet_wrap(vars(lineage_sim), ncol=1)+
+	xlab("Report date")+
+	ylab("Number of cases")+
+	theme(legend.position="bottom", axis.title.x=element_blank())+
+	guides(fill = guide_legend(nrow = 2, byrow = TRUE))+
+	ggtitle("A")+
+	NULL
+ggsave("../results/time_series_imported_cases_stacked.pdf", width=7.5/sqrt(2)*1.2, height=7.5*1.2, plot=p2)
+
+p3 <- p2 + p1 + plot_layout(ncol=1, heights=c(0.25,0.7))
+ggsave("../results/time_series_imported_cases_combined.pdf", width=7.5/sqrt(2)*1.2, height=7.5*1.2, plot=p3)
+save_pptx("../results/time_series_imported_cases_combined.pptx", width=7.5/sqrt(2)*1.3, height=8.5*1.2, plot=p3)
+
+
 
 df_metadata_hk_BA12 <- df_metadata_hk_import %>% filter(grepl("BA.[12]", lineage)) 
 samples_tocheck <- gsub("_\\d+", "", df_metadata_hk_BA12$Sample)
